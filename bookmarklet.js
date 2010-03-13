@@ -1,19 +1,24 @@
 (function() {
     var d = document,
-    b = d.body,
-    l,
-    e = escape,
-    u = 'http://sidneysm.com/webcl/req?q=',
+	b = d.body,
+	l,
+	e = encodeURIComponent,
+	u = 'http://sidneysm.com/webcl/req?m=script&q=',
+	ce = 'createElement',
+	ac = 'appendChild',
+	de = 'documentElement',
     q = prompt('');
 	if (q){
-		u += e(q) + '&m=' + (b ? 'script' : 'direct');
-	    if (b) {
-			l = d.createElement('scr' + 'ipt');
-			l.setAttribute('src', u += '&l=' + escape(d.location.href));
-			b.appendChild(l);
-		} else {
-			d.location.href = u;
+		if (!b) {
+			b = d[ce]('body');
+			if (!d[de]){
+				return;
+			}
+			d[de][ac](b);
 		}
+		l = d[ce]('scr' + 'ipt');
+		l.setAttribute('src', u += e(q) + '&l=' + e(d.location.href));
+		b[ac](l);
 	}
 })();
-void(0)
+void(0);
