@@ -1,4 +1,7 @@
 (function() {
+	if (!document.documentElement) {
+		return;
+	}
     var d = document,
 	b = d.body,
 	l,
