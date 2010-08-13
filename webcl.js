@@ -1,52 +1,79 @@
-
-global.WebCL = (function(){
-	function Query(string){
-		var args = string.split(' '), curArgs = args;
-		Object.defineProperty(this, 'command', { value: args.shift().toLowerCase(), writable: false });
-		Object.defineProperty(this, 'arguments', { get: function(){ return curArgs } });
-		Object.defineProperty(this, 'effectiveArguments', {
-			get: function(){ return curArgs.length },
-			set: function(effectiveArgs){ curArgs = args.slice(0, effectiveArgs-1).concat(args.slice(effectiveArgs-1).join(' ')) }
-		});
-		Object.defineProperty(this, 'maxArguments', { value: args.length, writable: false });
+global.webCL = (function(){
+	var replaceTokensInURL = (function(){
+		var tokenizer = /{(\w+)}/g;
+		
+		return function(string, replacements){
+			return string.replace(tokenizer, function(str, token){
+				return encodeURIComponent(replacements[token]) || '';
+			});
+		}
+	})();
+	
+	// Response formatters
+	function script(content){
+		return "\t\t(function(){\n\t\t\tvar scripts = document.getElementsByTagName('script'),\n\t\t\t    myScript = scripts[scripts.length-1];\n\t\t\tfunction(){" + content + "}();\n\t\t\tdocument.body.removeChild(myScript);\n\t\t})()";
+	}
+	function alert(content){
+		return script("alert(\"" + content.replace("\"", "\\\"") + "\")");
+	}
+	function redirect(content){
+		return script("document.location.href='"+ content.replace("'", "\\'") +"'");
 	}
 	
-	function WebCL(query, type){
-		if (!(this instanceof WebCL)) {
-			return new WebCL(query, type);
-		}
-		this.actions = WebCL.actions.slice();
-	}
-	WebCL.actions = [];
-	WebCL.prototype.registerActions = WebCL.registerActions = function(newActions){
-		Array.prototype.push.apply(this.actions, newActions);
-		return this;
-	};
-	WebCL.prototype.eval = function(query, type) {
-		var query = new Query(query), candidateActions = [], action;
-		this.actions.forEach(function(action){
-			if (action.args <= query.maxArguments && action.name === query.command) {
-				candidateActions.push(action);
-			}
-		});
-		candidateActions.sort(function(a, b) {
-			if (a.args < b.args) {
-				return 1;
-			} else if (a.args > b.args){
-				return -1;
-			} else {
-				return 0;
-			}
-		});
-		if (action = candidateActions[0]) {
-			return candidateActions.length.toString();
-		} else {
-			return '-SSWebCL: ' + query.command + '/' + query.maxArguments + ': action not found';
-		}
-	};
 	
-	return WebCL;
+	var webCL = {
+		actions: [],
+		eval: function(query, additionalActions){
+			var argv = query.split(' '),
+				effectiveActions = additionalActions ? this.actions.concat(additionalActions) : this.actions;
+			if (!argv.length) {
+				return script("");
+			}
+			argv[0] = argv[0].toLowerCase();
+			for (var i = effectiveActions.length - 1, action = effectiveActions[i]; i >= 0; i--, action = effectiveActions[i]){
+				if (action.name === argv[0]) {
+					// If we're representing the query as more arguments than the action supports, join the final arguments
+					// e.g. ["action", "Search", "string"] -> ["action", "Search string"]
+					if (argv.length - 1 > action.args) {
+						argv = argv.slice(0, action.args-1).concat(argv.slice(action.args-1).join(' '));
+					}
+					var content;
+					if (action.handler) {
+						content = action.handler.call(action, argv)+'';
+					} else if (action.url) {
+						content = replaceTokensInURL(action.url, argv);
+					}
+					switch (action.type){
+						case "url":
+							return redirect(content);
+							break;
+						case "script":
+							return script(content);
+							break;
+						default:
+							return alert(content);
+					}
+					break;
+				}
+			}
+			return alert("-SSWebCL: " + argv[0] + "/" + argv.length + ": action not found");
+		},
+		register: function(newActions){
+			Array.prototype.push.apply(this.actions, newActions);
+			this.actions.sort(function(a, b) {
+				if (a.args < b.args) {
+					return 1;
+				} else if (a.args > b.args){
+					return -1;
+				} else {
+					return 0;
+				}
+			});
+		}
+	}
+	return webCL;
 })();
+
 
 var port = 8081,
 	sys = require('sys'),
@@ -54,43 +81,29 @@ var port = 8081,
 	querystring = require('querystring'),
 	http = require('http');
 
-function handleURL(){
-
-};
-
-WebCL.registerActions([
+webCL.register([
 	{
 		name: 'list',
 		description: 'List all commands',
 		args: 0,
-		returns: 'text',
+		type: 'text',
 		handler: function(arg){}
 	},
 	{
 		name: 'g',
 		description: 'Google search',
 		args: 1,
-		returns: 'url',
-		handler: formatURL,
+		type: 'url',
 		url: 'http://google.com/search?q={1}'
 	},
 	{
 		name: 'gs',
 		description: 'Google I\'m Feeling Lucky',
 		args: 1,
-		returns: 'url',
-		handler: formatURL,
+		type: 'url',
 		url: 'http://google.com/search?q={1}&btnI=I%27m+Feeling+Lucky'
 	}
 ]);
-var formatURL = (function(){
-	var tokenizer = /{(\w+)}/g;
-	return function(string, replacements){
-		return string.replace(tokenizer, function(str, token){
-			return replacements[token] || '';
-		});
-	}
-})();
 
 function respond(res, opts, body){
 	var headers = {'Content-Type': opts.type || 'text/plain'};
@@ -107,7 +120,7 @@ http.createServer(function (req, res) {
 	requestURL.query = querystring.parse(requestURL.query, {numerals: false});
 	if (requestURL.pathname === '/'){
 		if (requestURL.query && requestURL.query.q) {
-			respond(res, {status: 200, cache: false}, new WebCL().eval(requestURL.query.q, requestURL.query.t || 'text'));
+			respond(res, {status: 200, cache: false, type:'application/javascript'}, webCL.eval(requestURL.query.q));
 		} else {
 			respond(res, {status: 501}, 'I\'m not sure what you want.');
 		}
